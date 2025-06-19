@@ -1,17 +1,11 @@
 import os
 from langchain.chains.conversation.memory import ConversationBufferWindowMemory
-from langchain.chains import ConversationChain
-from langchain.prompts.prompt import PromptTemplate
-from langchain.prompts.chat import ChatPromptTemplate
 from langchain_core.messages.human import HumanMessage
 from langchain_core.messages.ai import AIMessage
 from langchain_core.messages.system import SystemMessage
 from app.services.chatbot.chatbot_interface import Chatbot
 from app.utilities import sken_logger
-from app.utilities.constants import Constants
-from groq import Groq
 from langchain_openai import AzureChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
 from app.services.chatbot.chatbot_interface import Chatbot
 from app.utilities import sken_logger
 from app.utilities.env_util import EnvironmentVariableRetriever

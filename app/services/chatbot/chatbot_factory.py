@@ -1,7 +1,8 @@
-from app.services.chatbot.chatbot_mixtral_implementation import MixtralChatCompletion
+from app.services.chatbot.mixtral import MixtralChatCompletion
 from app.services.chatbot.llama import LLamaChatCompletion
 from app.services.chatbot.azure_gpt4omini import AzureOpenAIGPT4oMini
 from app.services.chatbot.azure_gpt4o import AzureOpenAIGPT4o
+from app.services.chatbot.huggingface_tgi import OnPremLLM
 
 class ChatbotFactory:
     """
@@ -18,5 +19,7 @@ class ChatbotFactory:
             return AzureOpenAIGPT4oMini()
         elif type == "gpt4o":
             return AzureOpenAIGPT4o()
+        elif type=="onprem":
+            return OnPremLLM()
         else:
             raise ValueError(f"Chat bot type = {type} is not implemented")
