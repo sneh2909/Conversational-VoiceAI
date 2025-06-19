@@ -1,7 +1,6 @@
 from base64 import b64encode
 import os
 from datetime import datetime
-import sounddevice as sd
 import numpy as np
 import audioop
 import io
