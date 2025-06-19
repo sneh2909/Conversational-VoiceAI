@@ -68,43 +68,63 @@ async def get_page2(request: Request):
     return templates.TemplateResponse("transcript.html", {"request": request})
 
 @app.websocket("/ws/{client_id}")
-async def websocket_endpoint_transcript(websocket: WebSocket, client_id: str, sample_rate: int = Query(...),format: str = Query(...)):
+async def websocket_endpoint_transcript(
+    websocket: WebSocket,
+    client_id: str,
+    sample_rate: int = Query(...),
+    format: str = Query(...)
+):
     CHUNKSIZE = Helper.calculate_chunk(lookahead_size, encoder_step_length, model_sample_rate)
-    
+
     try:
-        await manager.connect(client_id=client_id, websocket=websocket, sample_rate=sample_rate, chunk_size=CHUNKSIZE, connection_type = "asr", audio_format=format)
+        await manager.connect(
+            client_id=client_id,
+            websocket=websocket,
+            sample_rate=sample_rate,
+            chunk_size=CHUNKSIZE,
+            connection_type="asr",
+            audio_format=format
+        )
         logger.info(f"WebSocket connection established for client {client_id} with sample_rate {sample_rate}")
         await asr_model.init_client_cache(client_id)
+
         while True:
             audio_data = await websocket.receive()
+
             if "bytes" in audio_data:
-                # Update last activity timestamp
                 manager.asr_connections[client_id]['last_activity'] = datetime.now()
                 audio_bytes = audio_data["bytes"]
+
+                # 🟡 Handle incoming format
                 if manager.asr_connections[client_id]['format'] == 'mulaw':
-                    audio_bytes = audioop.ulaw2lin(audio_data["bytes"], 2)
-                
-                # sf = soundfile.SoundFile(
-                #         io.BytesIO(audio_bytes),
-                #         channels=1,
-                #         endian="LITTLE",
-                #         samplerate=model_sample_rate,
-                #         subtype="PCM_16",
-                #         format="RAW"
-                #     )
-                # signal, _ = librosa.load(sf, sr=model_sample_rate, dtype=np.float32)
-                signal = np.frombuffer(audio_bytes, dtype=np.int16)
+                    audio_bytes = audioop.ulaw2lin(audio_bytes, 2)
+                    signal = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                elif manager.asr_connections[client_id]['format'] == 'pcm':
+                    # ✅ Treat as Float32 PCM
+                    signal = np.frombuffer(audio_bytes, dtype=np.float32)
+                else:
+                    logger.warning(f"Unsupported audio format: {format}")
+                    continue
+
+                # 🔁 Resample if needed
                 if sample_rate != model_sample_rate:
                     signal = await Helper._adjust_sample_rate(sample_rate, signal, model_sample_rate)
+
                 connection_data = manager.asr_connections[client_id]
                 connection_data['buffer'] = np.concatenate((connection_data['buffer'], signal))
-                transcript=await generate_transcripts(websocket, client_id, connection_data)
-                # streamming llm output 
-                if transcript is None or transcript == "" or len(transcript.split())<2:
-                    continue
-                stream = chatbot_pipeline.response(query=transcript,memory=connection_data['memory'],system_prompt=Constants.fetch_constant("chatbot_system_prompt"))
 
-                response={
+                transcript = await generate_transcripts(websocket, client_id, connection_data)
+
+                if transcript is None or transcript == "" or len(transcript.split()) < 2:
+                    continue
+
+                stream = chatbot_pipeline.response(
+                    query=transcript,
+                    memory=connection_data['memory'],
+                    system_prompt=Constants.fetch_constant("chatbot_system_prompt")
+                )
+
+                response = {
                     "human": transcript,
                     "AI": ""
                 }
@@ -238,10 +258,22 @@ async def process_audio(signal, client_id:str, active_connections:dict):
         Exception: Logs an error if any exception occurs during audio processing and returns empty string and False.
     """
     try:
-        audio_segment = AudioSegment(signal.tobytes(), frame_rate=model_sample_rate, sample_width=signal.dtype.itemsize, 
-                                   channels=1)
-        
-        silence_chunks = detect_silence(audio_segment, min_silence_len=160, silence_thresh=-45)
+        # Normaliz`e float32 to int16 range
+        int16_signal = (signal * 32767).astype(np.int16)
+
+        # Create AudioSegment from int16 signal
+        audio_segment = AudioSegment(
+            data=int16_signal.tobytes(),
+            sample_width=int16_signal.dtype.itemsize,  # 2 bytes for int16
+            frame_rate=model_sample_rate,
+            channels=1
+        )
+         # Detect silence (adjust threshold and duration as needed)
+        silence_chunks = detect_silence(
+                audio_segment,
+                min_silence_len=160,        # in ms
+                silence_thresh=-45,         # in dBFS
+            )
         if silence_chunks:
             active_connections[client_id]["silence_count"] += 1
         else:

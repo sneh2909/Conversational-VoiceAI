@@ -51,19 +51,19 @@ class CacheAwareWhisper:
             if signal is None or len(signal) == 0:
                 raise ValueError("Empty or invalid audio signal")
 
-            # Normalize audio
-            audio_data = signal.astype(np.float32) / 32768.0
+            # # Normalize audio
+            # audio_data = signal.astype(np.float32) / 32768.0
             
             # Skip if signal is mostly silence
-            if np.abs(audio_data).mean() < 0.01:
-                logger.debug(f"Skipping transcription for client {client_id} due to silence.")
-                return self.client_caches[client_id].buffer_text
+            # if np.abs(signal).mean() < 0.01:
+            #     logger.debug(f"Skipping transcription for client {client_id} due to silence.")
+            #     return self.client_caches[client_id].buffer_text
 
             # Run transcription in thread pool
             segments, _ = await asyncio.get_event_loop().run_in_executor(
                 self._thread_pool,
                 self._transcribe_audio,
-                audio_data
+                signal
             )
 
             transcription = " ".join([seg.text.strip() for seg in segments if seg.text.strip()])
