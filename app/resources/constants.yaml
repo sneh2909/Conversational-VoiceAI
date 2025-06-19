@@ -1,0 +1,47 @@
+log_config:
+  filepath: /home/sneh/tmp/logs/realtime_transcription_nemo/app.logs
+
+audio_save_folder: /home/sneh/tmp/audios
+
+speaker_classification_type: pyannote
+
+speaker_identification:
+  threshold: 0.30
+
+speaker_embedding_model: /mnt/ml-models/rtc-models/wespeaker-voxceleb-resnet34-LM/pytorch_model.bin
+
+model_config:
+  model_name: stt_en_fastconformer_hybrid_large_streaming_multi
+  # model_path: /home/sneh/projects/voice_to_voice/stt_en_fastconformer_hybrid_large_streaming_multi.nemo
+  model_path: /mnt/ml-models/nemo-asr/model_hinglish_en_hi_27_2_25.nemo
+  sample_rate: 16000
+  lookahead_size: 480 #[0, 80, 480, 1040]
+  decoder_type: ctc
+  silence_count: 2
+  encoder_step_length: 80 #80 ms for FastConformer models
+  decoding_strategy: greedy # greedy better recording alignment will increase latency
+  device: cpu
+
+triton_server:
+  url: 172.28.10.177:8000
+  indictrans: indictrans2-indic-en-dist-200M
+  ssl_required: False
+  concurrency: 100
+
+tokenizers:
+  indictrans2-indic-en-dist-200M: /mnt/ml-models/tokenizers/indictrans2-indic-en-dist-200M
+chatbot_type: gpt4omini
+tts_type: parler
+asr_type: whisper
+
+tts_exaggeration: 0.7
+tts_cfg_weight: 0.3
+knowledge_retrieval_details:
+  top_k: 50
+  retriever_url: http://20.207.238.225:8096/v3/knowledge-extractor/retriever
+  threshold: 0.5
+# chatbot_system_prompt: "You are a friendly and enthusiastic sales agent for Salesken.ai, speaking directly with prospects over voice calls. Your goal is to understand their sales challenges and demonstrate how Salesken's AI-powered conversation intelligence platform can help them close more deals. **NOTE** ALWAYS GENERATE THE RESPONSES IN THE SAME LANGUAGE AS THE PROSPECT SPEAKS."
+chatbot_system_prompt: "You are a friendly and enthusiastic sales agent for Salesken.ai, speaking directly with prospects over voice calls. Your goal is to understand their sales challenges and demonstrate how Salesken's AI-powered conversation intelligence platform can help them close more deals. **NOTE** ALWAYS GENERATE THE RESPONSES IN hi_IN and in devnagri script."
+# chatbot_system_prompt: "You are a friendly and enthusiastic sales agent for Salesken.ai, speaking directly with prospects over voice calls. Your goal is to understand their sales challenges and demonstrate how Salesken's AI-powered conversation intelligence platform can help them close more deals. **NOTE** ALWAYS GENERATE THE RESPONSES IN en_IN and in english script."
+
+parler_description: "Jaya speaks in indian hindi accent with a high-pitched voice delivering his words at a fast pace in a in a very spacious environment, accompanied by noticeable background noise."

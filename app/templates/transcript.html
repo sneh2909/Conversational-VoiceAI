@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Speech Recognition Demo with Audio Playback</title>
+    <script src="{{ url_for('static', path='main.js') }}"></script>
+    <!-- Add Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Add custom styles -->
+    <style>
+        body {
+            background-color: #f8f9fa;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 900px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+            color: #2c3e50;
+        }
+        .control-panel {
+            background: white;
+            padding: 2rem;
+            border-radius: 15px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+        .btn-record {
+            width: 150px;
+            margin: 0 5px;
+            transition: all 0.3s ease;
+        }
+        .btn-record:hover {
+            transform: translateY(-2px);
+        }
+        .transcript-container {
+            background: white;
+            padding: 2rem;
+            border-radius: 15px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+            height: 400px;
+            overflow-y: auto;
+        }
+        .transcript-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        .transcript-container::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        .transcript-container::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+        .metrics-panel {
+            background: white;
+            padding: 1rem 2rem;
+            border-radius: 15px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+            margin-top: 1rem;
+        }
+        .audio-status-panel {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 15px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+            border-left: 4px solid #28a745;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+            background-color: #6c757d;
+            animation: pulse 2s infinite;
+        }
+        .status-indicator.active {
+            background-color: #28a745;
+        }
+        .status-indicator.error {
+            background-color: #dc3545;
+        }
+        .pulse-animation {
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .debug-panel {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 10px;
+            border: 1px solid #dee2e6;
+            margin-top: 1rem;
+        }
+        .debug-panel h6 {
+            color: #6c757d;
+            margin-bottom: 0.5rem;
+        }
+        .audio-controls {
+            margin-top: 1rem;
+        }
+        .alert-info {
+            border-left: 4px solid #17a2b8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎙️ Speech Recognition Demo with Audio Response</h1>
+            <p class="text-muted">Start speaking to get real-time transcription and AI audio responses</p>
+        </div>
+
+        <!-- Audio Status Panel -->
+        <div class="audio-status-panel">
+            <h5><i class="fas fa-volume-up"></i> Audio Status</h5>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="d-flex align-items-center">
+                        <span class="status-indicator" id="audioIndicator"></span>
+                        <span id="audioStatus">Ready for audio</span>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="d-flex align-items-center">
+                        <span class="badge bg-info" id="audioQueue">Queue: 0 items</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Control Panel -->
+        <div class="control-panel">
+            <div class="d-flex justify-content-center gap-2 flex-wrap">
+                <button id="startButton" onclick="startRecording()" class="btn btn-primary btn-record">
+                    <i class="fas fa-microphone"></i> Start Recording
+                </button>
+                <button id="endButton" onclick="stopRecording()" class="btn btn-danger btn-record" disabled>
+                    <i class="fas fa-stop"></i> Stop Recording
+                </button>
+                <button id="clearCacheButton" onclick="clearCache()" class="btn btn-secondary btn-record">
+                    <i class="fas fa-trash"></i> Clear Cache
+                </button>
+                <!-- <select id="languageSelect" onchange="handleLanguageChange(e.target.value)" class="btn btn-secondary btn-record">
+                    <option value="hi_IN">हिंदी (Hindi)</option>
+                    <option value="en_IN">English</option>
+                </select> -->
+            </div>
+            
+            <!-- Audio Controls -->
+            <div class="audio-controls">
+                <div class="d-flex justify-content-center gap-2 flex-wrap">
+                    <button onclick="clearAudioQueue()" class="btn btn-warning btn-sm">
+                        <i class="fas fa-stop-circle"></i> Stop Audio
+                    </button>
+                    <button onclick="testAudio()" class="btn btn-info btn-sm">
+                        <i class="fas fa-play"></i> Test Audio
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Transcript Section -->
+        <div class="transcript-section">
+            <h4 class="mb-3"><i class="fas fa-comments"></i> Live Conversation</h4>
+            <div id="transcripts" class="transcript-container">
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle"></i>
+                    <strong>Ready!</strong> Click "Start Recording" to begin the conversation. You'll see your speech transcribed here, followed by AI responses that will be played as audio.
+                </div>
+            </div>
+        </div>
+
+        <!-- Metrics Panel -->
+        <div id="metrics" class="metrics-panel" style="display: none;">
+            <div class="row">
+                <div class="col-md-4">
+                    <h6 class="text-muted">Session Duration</h6>
+                    <h4 id="duration">0s</h4>
+                </div>
+                <div class="col-md-4">
+                    <h6 class="text-muted">Connection Status</h6>
+                    <h4 class="text-success">Connected</h4>
+                </div>
+                <div class="col-md-4">
+                    <h6 class="text-muted">Audio Format</h6>
+                    <h4 class="text-info">PCM 16kHz</h4>
+                </div>
+            </div>
+        </div>
+
+        <!-- Debug Panel -->
+        <div class="debug-panel">
+            <h6><i class="fas fa-bug"></i> Debug Information</h6>
+            <div class="row">
+                <div class="col-md-6">
+                    <small class="text-muted">
+                        <strong>WebSocket:</strong> <span id="wsStatus">Connecting...</span><br>
+                        <strong>Sample Rate:</strong> 16kHz<br>
+                        <strong>Format:</strong> PCM encoding
+                    </small>
+                </div>
+                <div class="col-md-6">
+                    <small class="text-muted">
+                        <strong>Audio Queue:</strong> <span id="debugQueue">0 pending</span><br>
+                        <strong>Client ID:</strong> <span id="clientId">Loading...</span><br>
+                        <strong>Last Activity:</strong> <span id="lastActivity">None</span>
+                    </small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Instructions -->
+        <div class="alert alert-light mt-3">
+            <h6><i class="fas fa-lightbulb"></i> How to use:</h6>
+            <ol class="mb-0">
+                <li><strong>Click "Start Recording"</strong> to begin capturing your voice</li>
+                <li><strong>Speak clearly</strong> into your microphone</li>
+                <li><strong>Watch the transcript</strong> appear in real-time</li>
+                <li><strong>Listen to AI responses</strong> - they'll play automatically</li>
+                <li><strong>Click "Stop Recording"</strong> when finished</li>
+            </ol>
+            <hr>
+            <small class="text-muted">
+                <strong>Troubleshooting:</strong> If audio isn't playing, check the Audio Status panel above. 
+                Use "Test Audio" to verify your speakers work, and "Stop Audio" to clear any stuck audio queue.
+            </small>
+        </div>
+    </div>
+
+    <!-- Add Font Awesome for icons -->
+    <script src="https://kit.fontawesome.com/your-font-awesome-kit.js" crossorigin="anonymous"></script>
+    <!-- Add Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Initialize debug info -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('clientId').textContent = Date.now();
+            document.getElementById('wsStatus').textContent = 'Initializing...';
+            
+            // Update WebSocket status when connection is established
+            const originalInitWebSocket = window.initWebSocket;
+            window.initWebSocket = function() {
+                originalInitWebSocket();
+                setTimeout(() => {
+                    if (websocket && websocket.readyState === WebSocket.OPEN) {
+                        document.getElementById('wsStatus').textContent = 'Connected';
+                        document.getElementById('wsStatus').className = 'text-success';
+                    }
+                }, 1000);
+            };
+        });
+    </script>
+</body>
+</html>
