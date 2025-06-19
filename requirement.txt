@@ -17,9 +17,14 @@ aiofiles==24.1.0
 langchain==0.3.25
 langchain-core==0.3.64
 langchain-groq==0.3.2
+langchain-openai==0.3.21
+langchain-community==0.3.24
+langchain-text-splitters==0.3.8
+langgraph==0.4.8
 groq==0.26.0
 git+https://github.com/huggingface/parler-tts.git
 faster-whisper==1.1.0
 azure-common==1.1.28
 azure-core==1.34.0
 azure-search-documents==11.5.1
+sarvamai==0.1.5
