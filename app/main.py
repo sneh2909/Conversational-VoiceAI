@@ -33,20 +33,14 @@ lookahead_size = Constants.fetch_constant("model_config")["lookahead_size"]
 encoder_step_length = Constants.fetch_constant("model_config")["encoder_step_length"]
 model_path = Constants.fetch_constant("model_config")["model_path"]
 model_sample_rate = Constants.fetch_constant("model_config")["sample_rate"]
-silence_count_threshold = Constants.fetch_constant("model_config")["silence_count"]
 chatbot_pipeline = ChatbotFactory.create_chatbot(Constants.fetch_constant("chatbot_type"))
 tts_pipeline = TTSFactory.create_tts_pipeline(Constants.fetch_constant("tts_type"))
-
-def silence_calculator():
-    chunk_size_s = round((lookahead_size + encoder_step_length)/1000,2)
-    silence_threshold_s = chunk_size_s*silence_count_threshold
-    return silence_threshold_s
-silence_threshold_s  = silence_calculator()
+asr_model = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global asr_model 
-    global indic_translator 
+    global asr_model
+    global indic_translator
     indic_translator = IndicTrans()
     # Use factory to create ASR model
     asr_type = Constants.fetch_constant("asr_type")  # Add this to your constants.yaml
@@ -74,127 +68,126 @@ async def websocket_endpoint_transcript(
     sample_rate: int = Query(...),
     format: str = Query(...)
 ):
-    CHUNKSIZE = Helper.calculate_chunk(lookahead_size, encoder_step_length, model_sample_rate)
-
     try:
-        await manager.connect(
-            client_id=client_id,
-            websocket=websocket,
-            sample_rate=sample_rate,
-            chunk_size=CHUNKSIZE,
-            connection_type="asr",
-            audio_format=format
-        )
-        logger.info(f"WebSocket connection established for client {client_id} with sample_rate {sample_rate}")
+        await manager.connect(client_id=client_id, websocket=websocket, sample_rate=sample_rate, connection_type="asr", audio_format=format)
+        logger.info(f"WebSocket connection established for client {client_id}")
         await asr_model.init_client_cache(client_id)
+        connection_data = manager.asr_connections[client_id]
+
+        SILENCE_THRESHOLD_MS = 700
+        MIN_AUDIO_DURATION_S = 1.0
+        SILENCE_DBFS_THRESH = -40
 
         while True:
-            audio_data = await websocket.receive()
+            audio_bytes = await websocket.receive_bytes()
+            connection_data['last_activity'] = datetime.now()
 
-            if "bytes" in audio_data:
-                manager.asr_connections[client_id]['last_activity'] = datetime.now()
-                audio_bytes = audio_data["bytes"]
+            if connection_data['format'] == 'pcm':
+                signal = np.frombuffer(audio_bytes, dtype=np.float32)
+            else:
+                logger.warning(f"Unsupported audio format: {format}")
+                continue
 
-                # 🟡 Handle incoming format
-                if manager.asr_connections[client_id]['format'] == 'mulaw':
-                    audio_bytes = audioop.ulaw2lin(audio_bytes, 2)
-                    signal = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-                elif manager.asr_connections[client_id]['format'] == 'pcm':
-                    # ✅ Treat as Float32 PCM
-                    signal = np.frombuffer(audio_bytes, dtype=np.float32)
-                else:
-                    logger.warning(f"Unsupported audio format: {format}")
-                    continue
+            if sample_rate != model_sample_rate:
+                signal = await Helper._adjust_sample_rate(sample_rate, signal, model_sample_rate)
 
-                # 🔁 Resample if needed
-                if sample_rate != model_sample_rate:
-                    signal = await Helper._adjust_sample_rate(sample_rate, signal, model_sample_rate)
+            connection_data['buffer'] = np.concatenate((connection_data['buffer'], signal))
 
-                connection_data = manager.asr_connections[client_id]
-                connection_data['buffer'] = np.concatenate((connection_data['buffer'], signal))
+            pcm_audio_data = (connection_data['buffer'] * 32767).astype(np.int16).tobytes()
+            audio_segment = AudioSegment(data=pcm_audio_data, sample_width=2, frame_rate=model_sample_rate, channels=1)
 
-                transcript = await generate_transcripts(websocket, client_id, connection_data)
+            if len(audio_segment) > SILENCE_THRESHOLD_MS:
+                last_chunk_for_vad = audio_segment[-SILENCE_THRESHOLD_MS:]
+                silence = detect_silence(last_chunk_for_vad, min_silence_len=SILENCE_THRESHOLD_MS, silence_thresh=SILENCE_DBFS_THRESH)
 
-                if transcript is None or transcript == "" or len(transcript.split()) < 2:
-                    continue
+                if silence and (len(audio_segment) / 1000.0) > MIN_AUDIO_DURATION_S:
+                    audio_to_transcribe = connection_data['buffer'].copy()
+                    connection_data['buffer'] = np.array([], dtype=np.float32)
+                    # --- Transcription ---
+                    transcript = await asr_model.transcribe_chunk(audio_to_transcribe, client_id)
+                    await asr_model.clear_cache(client_id) # Clear text buffer after transcription
 
-                stream = chatbot_pipeline.response(
-                    query=transcript,
-                    memory=connection_data['memory'],
-                    system_prompt=Constants.fetch_constant("chatbot_system_prompt")
-                )
-
-                response = {
-                    "human": transcript,
-                    "AI": ""
-                }
-                buffered_text = ""
-                for chunk in stream:
-                # for chunk in chatbot_pipeline.response_with_tools(
-                #         query="Tell me about product features",
-                #         memory=connection_data['memory'],
-                #         org_id="1",
-                #         product_ids=[1]
-                #     ):
-
-                    print(chunk.content, end="")
-                    
-                    text = chunk.content
-                    if text == "" or text == "None" or text is None:
+                    if not transcript or not transcript.strip() or transcript == "" or transcript==".":
+                        logger.info("VAD: Transcription was empty, skipping.")
                         continue
-
-                    response["AI"] += text
-                    buffered_text += text  # No need to strip or add spaces
-
-                    # Check if a sentence ends (period detected)
-                    if any(p in buffered_text for p in ['.', '\n', '!', '?', ':', ',', ';']):
-                        # Split the buffered text at the last period
-                        sentences = buffered_text.rsplit('.', 1)
-                        complete_sentence = sentences[0].strip() + '.'
-                        remaining_buffer = sentences[1] if len(sentences) > 1 else ""
-
-                        # Generate and send audio
-                        if complete_sentence.strip():
-                            async for audio_chunk,sample_rate in tts_pipeline.generate_audio_stream(buffered_text):
-                                # sd.play(audio_chunk, samplerate=sample_rate)
-                                audio_b64 = encode_audio_to_base64(audio_chunk,sample_rate=sample_rate)
-                                await websocket.send_json({
-                                    "type": "audio_chunk",
-                                    "audio_data": audio_b64
-                                })
-
-                        # Update buffer with leftover (partial) sentence
-                        buffered_text = remaining_buffer
                     
-                    # Count words in the buffer
-                #     word_count = len(buffered_text.split())
+                    logger.info(f"VAD: Transcript for {client_id}: {transcript}")
 
-                #     if word_count >= 7:  # You can change this to 5 or 10 as needed
-                #         # Generate and send audio
-                #         audio_array, sample_rate = tts_pipeline.generate_audio(buffered_text)
-                #         audio_b64 = encode_audio_to_base64(audio_array, sample_rate=sample_rate)
+                    stream = chatbot_pipeline.response(
+                        query=transcript,
+                        memory=connection_data['memory'],
+                        system_prompt=Constants.fetch_constant("chatbot_system_prompt")
+                    )
 
-                #         await websocket.send_json({
-                #             "type": "audio_chunk",
-                #             "audio_data": audio_b64
-                #         })
-                #         # Clear the buffer after sending
-                #         buffered_text = ""
-                    
+                    response = {
+                        "human": transcript,
+                        "AI": ""
+                    }
+                    buffered_text = ""
+                    for chunk in stream:
+                    # for chunk in chatbot_pipeline.response_with_tools(
+                    #         query="Tell me about product features",
+                    #         memory=connection_data['memory'],
+                    #         org_id="1",
+                    #         product_ids=[1]
+                    #     ):
 
-                # Optionally flush remaining buffer
-                if buffered_text.strip():
-                    async for audio_chunk,sample_rate in tts_pipeline.generate_audio_stream(buffered_text):
-                        audio_b64 = encode_audio_to_base64(audio_chunk,sample_rate=sample_rate)
-                        await websocket.send_json({
-                            "type": "audio_chunk",
-                            "audio_data": audio_b64
-                        })
-                manager.asr_connections[client_id]['memory'].save_context({"human":transcript},{"AI":response["AI"]})
+                        print(chunk.content, end="")
+                        
+                        text = chunk.content
+                        if text == "" or text == "None" or text is None:
+                            continue
 
-                await websocket.send_json(response)
+                        response["AI"] += text
+                        buffered_text += text  # No need to strip or add spaces
 
-                
+                        # Check if a sentence ends (period detected)
+                        if any(p in buffered_text for p in ['.', '\n', '!', '?', ':', ',', ';']):
+                            # Split the buffered text at the last period
+                            sentences = buffered_text.rsplit('.', 1)
+                            complete_sentence = sentences[0].strip() + '.'
+                            remaining_buffer = sentences[1] if len(sentences) > 1 else ""
+
+                            # Generate and send audio
+                            if complete_sentence.strip():
+                                async for audio_chunk,sample_rate in tts_pipeline.generate_audio_stream(buffered_text):
+                                    # sd.play(audio_chunk, samplerate=sample_rate)
+                                    audio_b64 = encode_audio_to_base64(audio_chunk,sample_rate=sample_rate)
+                                    await websocket.send_json({
+                                        "type": "audio_chunk",
+                                        "audio_data": audio_b64
+                                    })
+
+                            # Update buffer with leftover (partial) sentence
+                            buffered_text = remaining_buffer
+                        
+                        # Count words in the buffer
+                    #     word_count = len(buffered_text.split())
+
+                    #     if word_count >= 7:  # You can change this to 5 or 10 as needed
+                    #         # Generate and send audio
+                    #         audio_array, sample_rate = tts_pipeline.generate_audio(buffered_text)
+                    #         audio_b64 = encode_audio_to_base64(audio_array, sample_rate=sample_rate)
+
+                    #         await websocket.send_json({
+                    #             "type": "audio_chunk",
+                    #             "audio_data": audio_b64
+                    #         })
+                    #         # Clear the buffer after sending
+                    #         buffered_text = ""
+                        
+
+                    # Optionally flush remaining buffer
+                    if buffered_text.strip():
+                        async for audio_chunk,sample_rate in tts_pipeline.generate_audio_stream(buffered_text):
+                            audio_b64 = encode_audio_to_base64(audio_chunk,sample_rate=sample_rate)
+                            await websocket.send_json({
+                                "type": "audio_chunk",
+                                "audio_data": audio_b64
+                            })
+                    manager.asr_connections[client_id]['memory'].save_context({"human":transcript},{"AI":response["AI"]})
+
+                    await websocket.send_json(response)                
             # await manager.send_message(client_id, transcript)
     except WebSocketDisconnect as exe:
         logger.error(f"WebSocket connection closed for client {client_id}: {exe}")
@@ -214,11 +207,11 @@ def encode_audio_to_base64(audio_array: np.ndarray, sample_rate: int = 16000) ->
     buffer.seek(0)
     return base64.b64encode(buffer.read()).decode('utf-8')
 
-async def generate_transcripts(websocket, client_id, connection_data):
+async def generate_transcripts(websocket, client_id, connection_data, signal):
     while len(connection_data['buffer']) > connection_data['chunk_size']:
         chunk = connection_data['buffer'][:connection_data['chunk_size']]
         connection_data['buffer'] = connection_data['buffer'][connection_data['chunk_size']:]
-        transcript, silence_detected, duration = await process_audio(chunk, client_id, manager.asr_connections)
+        transcript, silence_detected, duration = await process_audio(signal, client_id, manager.asr_connections)
         connection_data['current_time'] += duration
 
         if connection_data['snippet_start_time'] == None:
