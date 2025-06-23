@@ -32,6 +32,9 @@ logger = sken_logger.LoggerAdap(sken_logger.get_logger(__name__),{"realtime_tran
         
 # Initialize connection manager
 manager = ConnectionManager()
+lookahead_size = Constants.fetch_constant("model_config")["lookahead_size"] 
+encoder_step_length = Constants.fetch_constant("model_config")["encoder_step_length"]
+model_path = Constants.fetch_constant("model_config")["model_path"]
 model_sample_rate = Constants.fetch_constant("model_config")["sample_rate"]
 chatbot_pipeline = ChatbotFactory.create_chatbot(Constants.fetch_constant("chatbot_type"))
 tts_pipeline = TTSFactory.create_tts_pipeline(Constants.fetch_constant("tts_type"))
@@ -213,10 +216,12 @@ async def websocket_endpoint_transcript(
                         process_user_utterance(websocket, client_id, audio_to_transcribe, model_sample_rate)
                     )
 
-    except WebSocketDisconnect as exe:
-        logger.error(f"WebSocket connection closed for client {client_id}: {exe}")
-    except Exception as exe:
-        logger.error(f"Error Occurred for client {client_id}: {exe}", exc_info=True)
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket connection closed for client {client_id}")
+    except Exception as e:
+        logger.error(f"Error in WebSocket endpoint for {client_id}: {e}", exc_info=True)
     finally:
-        await manager.disconnect(client_id, connection_type="asr")
-        await asr_model.remove_client(client_id)
+        if manager.is_client_connected(client_id, "asr"):
+            await asr_model.remove_client(client_id)
+            manager.disconnect(client_id, "asr")
+            logger.info(f"Cleaned up resources for client {client_id}")

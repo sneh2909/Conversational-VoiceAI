@@ -11,7 +11,7 @@ logger = sken_logger.LoggerAdap(sken_logger.get_logger(__name__),{"realtime_tran
 class ConnectionManager:
     def __init__(self):
         self.asr_connections: Dict[str, dict] = {}
-        self.speaker_detection_connections: Dict[str, dict] = {}
+        self.tts_connections: Dict[str, dict] = {}
         self.lock = asyncio.Lock()
         
     async def connect(self, client_id: str, websocket: WebSocket, sample_rate: int,  
@@ -32,11 +32,10 @@ class ConnectionManager:
                     "last_activity": datetime.now(),
                     "memory": ConversationBufferWindowMemory(k=5,human_prefix="human")
                 }
-            elif connection_type == "speaker_detection":
-                self.speaker_detection_connections[client_id] = {
+            elif connection_type == "tts":
+                self.tts_connections[client_id] = {
                     'websocket': websocket,
                     'client': client,
-
                 }
     
     async def disconnect(self, client_id: str, connection_type: str):
@@ -44,16 +43,16 @@ class ConnectionManager:
             if connection_type == "asr":
                 if client_id in self.asr_connections:
                     del self.asr_connections[client_id]
-            elif connection_type == "speaker_detection":
-                if client_id in self.speaker_detection_connections:
-                    del self.speaker_detection_connections[client_id]
+            elif connection_type == "tts":
+                if client_id in self.tts_connections:
+                    del self.tts_connections[client_id]
 
     async def send_message(self, client_id: str, message: str, connection_type: str):
         try:
             if connection_type == "asr":
                 websocket = self.asr_connections[client_id]['websocket']
             else:
-                websocket = self.speaker_detection_connections[client_id]['websocket']
+                websocket = self.tts_connections[client_id]['websocket']
             await websocket.send_text(message)
         except Exception as e:
             logger.error(f"Error sending message to client {client_id}: {e}")
