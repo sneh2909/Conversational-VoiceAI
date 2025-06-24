@@ -318,29 +318,6 @@ def encode_audio_to_base64(audio_array: np.ndarray, sample_rate: int = 16000) ->
     buffer.seek(0)
     return base64.b64encode(buffer.read()).decode('utf-8')
 
-async def generate_transcripts(websocket, client_id, connection_data):
-    while len(connection_data['buffer']) > connection_data['chunk_size']:
-        chunk = connection_data['buffer'][:connection_data['chunk_size']]
-        connection_data['buffer'] = connection_data['buffer'][connection_data['chunk_size']:]
-        transcript, silence_detected, duration = await process_audio(chunk, client_id, manager.asr_connections)
-        connection_data['current_time'] += duration
-
-        if connection_data['snippet_start_time'] == None:
-            connection_data['snippet_start_time'] = connection_data['current_time']-duration
-
-        if silence_detected:
-            if transcript:
-                # if Helper.contains_hindi(transcript):
-                    # transcript = await indic_translator.get_translations([transcript])
-                await websocket.send_json({
-                        "start": round(connection_data['snippet_start_time'], 2),
-                        "end": round(connection_data['current_time']-silence_threshold_s, 2),
-                        "text": transcript})    
-            connection_data['snippet_start_time'] = None
-        # await manager.send_message(client_id,  transcript, connection_type="asr")
-            return transcript
-
-
 async def process_audio(signal, client_id:str, active_connections:dict):
     """
     Processes a chunk of audio data, detects silence, and transcribes the audio. 
