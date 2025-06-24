@@ -56,7 +56,9 @@ class CacheAwareWhisper:
                 logger.warning("transcribe_chunk called with empty audio signal.")
                 return ""
 
-            # The transcription is a blocking CPU/GPU-bound task,
+            # # Normalize audio
+            # audio_data = signal.astype(np.float32) / 32768.0
+            
             # so we run it in a separate thread to not block the asyncio event loop.
             segments, _ = await asyncio.get_event_loop().run_in_executor(
                 self._thread_pool,
@@ -82,8 +84,7 @@ class CacheAwareWhisper:
             return ""
 
     def _transcribe_audio(self, audio: np.ndarray, initial_prompt: str):
-        # Use the previous transcript as a prompt for better context and accuracy.
-        return CacheAwareWhisper._model.transcribe(audio, beam_size=2, initial_prompt=initial_prompt)
+        return CacheAwareWhisper._model.transcribe(audio, beam_size=2, initial_prompt=initial_prompt,no_repeat_ngram_size=10)
 
     async def clear_cache(self, client_id: str) -> bool:
         """Clears the text buffer for a specific client."""

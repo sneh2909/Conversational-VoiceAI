@@ -1,6 +1,7 @@
 import asyncio
 import numpy as np
 from datetime import datetime
+from app.utilities.constants import Constants
 from typing import Dict
 from fastapi import HTTPException, WebSocket
 from app.utilities import sken_logger
@@ -22,7 +23,7 @@ class ConnectionManager:
             if connection_type == "asr":
                 self.asr_connections[client_id] = {
                     'websocket': websocket,
-                    'buffer': np.array([], dtype=np.int16),
+                    'buffer': np.array([], dtype=np.int16) if Constants.fetch_constant("asr_type")=="nemo" else np.array([],dtype=np.float32),
                     'format': audio_format,
                     "snippet_start_time": 0,
                     "current_time": 0,
