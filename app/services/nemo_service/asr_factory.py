@@ -1,4 +1,4 @@
-from app.services.nemo_service.groq_asr import WhisperASR
+from app.services.nemo_service.groq_asr import GroqWhisperASR
 from app.services.nemo_service.cache_aware_model import CacheAware
 from app.services.nemo_service.whisper import CacheAwareWhisper
 
@@ -10,5 +10,7 @@ class ASRFactory:
             return await CacheAwareWhisper.create()
         elif type == "nemo":
             return await CacheAware.create(lookahead_size)
+        elif type == "groq":
+            return await GroqWhisperASR.create()
         else:
             raise ValueError(f"Unknown ASR pipeline type: {type}")

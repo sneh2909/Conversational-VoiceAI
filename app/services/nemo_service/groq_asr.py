@@ -1,67 +1,79 @@
-from groq import Groq
-from typing import Optional
-from app.utilities import sken_logger
-from app.utilities.env_util import EnvironmentVariableRetriever
-import torch 
 import os
+import time
 import tempfile
-from scipy.io import wavfile
-from app.utilities.helper import Helper
-import torch
-import numpy as np
-from typing import Dict, List, Optional, Tuple
-from pydub import AudioSegment
-from app.utilities.constants import Constants
 import asyncio
+import numpy as np
+from typing import Dict
+from dataclasses import dataclass, field
+from threading import Lock
 from concurrent.futures import ThreadPoolExecutor
 
+from groq import Groq
+from app.utilities import sken_logger
+from app.utilities.env_util import EnvironmentVariableRetriever
+import soundfile as sf  # For writing numpy audio to WAV
 
-logger = sken_logger.LoggerAdap(sken_logger.get_logger(__name__), {"realtime_transcription": "nemo"})
+logger = sken_logger.LoggerAdap(sken_logger.get_logger(__name__), {"realtime_transcription": "whisper"})
 
-class WhisperASR():
+
+@dataclass
+class WhisperClientCache:
+    buffer_text: str = ""
+    last_access: float = field(default_factory=time.time)
+
+
+class GroqWhisperASR:
     def __init__(self):
         self.api_key = EnvironmentVariableRetriever.get_env_variable("GROQ_API_KEY")
         self.groq_client = Groq(api_key=self.api_key)
-        self.client_caches: Dict[str] = {}
+        self.client_caches: Dict[str, WhisperClientCache] = {}
         self._thread_pool = ThreadPoolExecutor(max_workers=4)
         self._cache_lock = asyncio.Lock()
-        
+        self._model_lock = Lock()  # Placeholder if needed later
+
+    @classmethod
+    async def create(cls, *args, **kwargs) -> "GroqWhisperASR":
+        instance = cls()
+        return instance
+
+    async def init_client_cache(self, client_id: str):
+        if client_id not in self.client_caches:
+            self.client_caches[client_id] = WhisperClientCache()
+            logger.info(f"Initialized Whisper cache for client {client_id}")
+
     async def transcribe_chunk(self, signal: np.ndarray, client_id: str) -> str:
-        """
-        Transcribe an audio chunk with error handling and performance monitoring
-        """
         try:
-            audio_segment = AudioSegment(signal.tobytes(), frame_rate=16000, sample_width=signal.dtype.itemsize, 
-                                   channels=1)
-            logger.info(f"Transcribing chunk for client {client_id}")
-            result = await asyncio.get_event_loop().run_in_executor(
+            await self.init_client_cache(client_id)
+
+            if signal is None or len(signal) == 0:
+                logger.warning("transcribe_chunk called with empty audio signal.")
+                return ""
+
+            prev_text = self.client_caches[client_id].buffer_text
+
+            transcription = await asyncio.get_event_loop().run_in_executor(
                 self._thread_pool,
-                self.process_audio_transcription,
-                audio_segment,
-                self.client_caches.get(client_id, None),
+                self._transcribe_audio,
+                signal,
+                prev_text
             )
 
-            # processing_time = time.time() - start_time 
-            # logger.info(f"Transcription completed in {processing_time:.2f} seconds")           
-            return result
+            if transcription:
+                self.client_caches[client_id].buffer_text = transcription
+                self.client_caches[client_id].last_access = time.time()
+
+            return transcription
 
         except Exception as e:
-            logger.error(f"Transcription failed: {str(e)}")
-            raise
+            logger.error(f"Whisper transcription failed for client {client_id}: {e}", exc_info=True)
+            return ""
 
-    def process_audio_transcription(
-        self, 
-        audio_segment: np.ndarray,
-        client_cache: Optional[Dict[str, str]] = None
-    ) -> str:
-        """
-        Process audio transcription with the model
-        """
+    def _transcribe_audio(self, audio: np.ndarray, initial_prompt: str) -> str:
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
                 temp_audio_path = temp_audio.name
-                audio_segment.export(temp_audio_path, format="wav")
-            # Send the audio file to Groq Whisper
+                sf.write(temp_audio_path, audio, samplerate=16000)
+
             with open(temp_audio_path, "rb") as file:
                 response = self.groq_client.audio.transcriptions.create(
                     file=(temp_audio_path, file.read()),
@@ -69,42 +81,33 @@ class WhisperASR():
                     response_format="verbose_json",
                 )
 
-            os.remove(temp_audio_path)  # Clean up
-            return response.text
-        except Exception as e:
-            logger.error(f"Error in ASR: {e}")
-            return None
+            os.remove(temp_audio_path)
+            return response.text.strip() if response else ""
 
-    async def transcribe_chunks(
-        self, 
-        signals: List[np.ndarray], 
-        client_ids: List[str]
-    ) -> List[str]:
-        """
-        Batch process multiple audio chunks simultaneously
-        """
-        tasks = [
-            self.transcribe_chunk(signal, client_id) 
-            for signal, client_id in zip(signals, client_ids)
-        ]
-        return await asyncio.gather(*tasks)
+        except Exception as e:
+            logger.error(f"Error in ASR: {e}", exc_info=True)
+            return ""
 
     async def clear_cache(self, client_id: str) -> bool:
-        """
-        Clear and reinitialize cache for a specific client
-        """
         try:
-            logger.info(f"Cache cleared and reinitialized for client {client_id}")
+            if client_id in self.client_caches:
+                self.client_caches[client_id].buffer_text = ""
+                logger.info(f"Cleared Whisper text cache for client {client_id}")
             return True
         except Exception as e:
-            logger.error(f"Failed to clear cache for client {client_id}: {str(e)}")
+            logger.error(f"Failed to clear Whisper cache for {client_id}: {e}")
             return False
 
     async def remove_client(self, client_id: str):
-        """
-        Remove a client's cache from memory
-        """
-        async with self._cache_lock:
-            if client_id in self.client_caches:
-                del self.client_caches[client_id]
-                logger.info(f"Removed cache for client {client_id}")
+        if client_id in self.client_caches:
+            del self.client_caches[client_id]
+            logger.info(f"Removed Whisper cache for client {client_id}")
+
+    async def cleanup(self):
+        try:
+            self.client_caches.clear()
+            self._thread_pool.shutdown(wait=True)
+            logger.info("Whisper cleanup completed successfully")
+        except Exception as e:
+            logger.error(f"Whisper cleanup error: {e}", exc_info=True)
+            raise
