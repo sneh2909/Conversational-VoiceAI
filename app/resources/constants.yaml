@@ -30,8 +30,8 @@ triton_server:
 
 tokenizers:
   indictrans2-indic-en-dist-200M: /mnt/ml-models/tokenizers/indictrans2-indic-en-dist-200M
-chatbot_type: gpt4omini
-tts_type: parler
+chatbot_type: gemini
+tts_type: sarvam
 asr_type: whisper
 
 tts_exaggeration: 0.7
