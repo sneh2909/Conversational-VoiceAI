@@ -1,7 +1,3 @@
-Of course\! Here is a new, comprehensive `README.md` file for your `Voice2Voice` project that replaces "Naadyantra" and removes any mention of "Salesken", based on the code you provided.
-
------
-
 # Voice2Voice: Real-Time Conversational AI
 
 A sophisticated, real-time voice-to-voice conversational AI pipeline built with FastAPI. This project integrates multiple state-of-the-art ASR, LLM, and TTS services into a seamless, low-latency voice bot experience. Its modular design allows for easy swapping of components to suit different needs.
@@ -103,4 +99,5 @@ Follow these steps to set up and run the project on your local machine.
       * Enter a session ID and task details and click "Connect".
       * On the next page, click "Start Recording" and begin speaking.
       * You will see your speech transcribed in real-time, and the AI's audio response will play automatically.
+
       * Click "Stop Recording" to end the session.
